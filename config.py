@@ -87,10 +87,12 @@ def build_parser():
     g.add_argument('--save_path', type=str, default='exps/exp1', help='Output folder (score.txt, model/, config.json)')
     g.add_argument('--initial_model', type=str, default='', help='Start from these weights (epoch restarts at 1). Mismatched layers, e.g. the classifier head, are skipped')
     g.add_argument('--resume', type=str, default='auto', help='"auto" = continue from save_path if a checkpoint exists, "none" = never, or a path to last.ckpt / model_XXXX.model')
+    g.add_argument('--max_hours', type=float, default=0, help='Stop (after the current epoch) before this many hours of training are used; 0 = no limit. Rerun to resume')
     g.add_argument('--keep_last', type=int, default=0, help='Keep only the N most recent model_XXXX.model files (0 = keep all, original)')
     g.add_argument('--save_best', type=_str2bool, default=True, help='Also save model/best.model (lowest EER)')
     g.add_argument('--log_interval', type=int, default=1, help='Print training progress every N batches (1 = original)')
     g.add_argument('--device', type=str, default='cuda', help='cuda / cuda:0 / cpu')
+    g.add_argument('--data_parallel', type=_str2bool, default=False, help='Split each training batch over all visible GPUs (torch.nn.DataParallel); evaluation stays on one GPU')
 
     g = p.add_argument_group('Command')
     g.add_argument('--eval', dest='eval', action='store_true', help='Only evaluate --initial_model on --eval_list and exit')

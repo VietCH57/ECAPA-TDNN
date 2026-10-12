@@ -51,9 +51,10 @@ python train.py -h
 | Dữ liệu | `--num_frames --batch_size --n_cpu --seed` |
 | Augment | `--aug_probs` (clean, reverb, babble, music, noise, tv) `--snr_noise --snr_speech --snr_music --num_noise --num_speech --num_music --specaug --specaug_freq --specaug_time` |
 | Tối ưu | `--max_epoch --lr --lr_decay --lr_step --weight_decay --grad_clip` |
+| Nhiều GPU | `--data_parallel` (chia mỗi batch train cho mọi GPU; eval chạy trên 1 GPU; checkpoint giữ nguyên định dạng) |
 | Mô hình / loss | `--C --m --s --n_class` (mặc định tự đếm từ train list) |
 | Đánh giá | `--test_step --eval_frames --num_eval --eval_mode --dcf_ptarget --eval_meta` |
-| Checkpoint | `--save_path --initial_model --resume --keep_last --save_best --log_interval --device` |
+| Checkpoint | `--save_path --initial_model --resume --keep_last --save_best --log_interval --device --max_hours` |
 
 Kết quả được lưu trong `--save_path`:
 - `score.txt`: loss, độ chính xác, EER và minDCF qua từng lần đánh giá;

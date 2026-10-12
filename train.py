@@ -111,7 +111,15 @@ def main():
 	score_file = open(args.score_save_path, "a+")
 	do_eval = bool(args.eval_list)
 
+	t_start, ep_times = time.time(), []
 	while epoch <= args.max_epoch:
+		# stop cleanly before a wall-clock budget (e.g. Kaggle's 12 h) runs out; rerun the same command to resume
+		if args.max_hours > 0 and ep_times:
+			need = max(ep_times[-args.test_step:]) * 1.1
+			if time.time() - t_start + need > args.max_hours * 3600:
+				print('Stopping before epoch %d: --max_hours %.2f would be exceeded (%.2f h used). Rerun to resume from last.ckpt.'
+					  % (epoch, args.max_hours, (time.time() - t_start) / 3600))
+				break
 		t0 = time.time()
 		## Training for one epoch
 		loss, lr, acc = s.train_network(epoch=epoch, loader=trainLoader)
@@ -140,6 +148,7 @@ def main():
 				for f in olds:
 					os.remove(f)
 		s.save_checkpoint(last_ckpt, epoch, {'EERs': [float(x) for x in EERs], 'best': float(best)})
+		ep_times.append(time.time() - t0)
 		epoch += 1
 	score_file.close()
 

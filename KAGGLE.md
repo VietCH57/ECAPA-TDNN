@@ -84,9 +84,10 @@ Nếu có `val_trials_meta.csv` (sinh từ notebook chia tập), thêm `--eval_m
 | Augment | `--musan_path --rir_path` (để `""` là tắt), `--aug_probs 1,1,1,1,1,1` (clean, reverb, babble, music, noise, tv), `--snr_noise 0,15 --snr_speech 13,20 --snr_music 5,15`, `--num_noise 1,1 --num_speech 3,8 --num_music 1,1` |
 | SpecAugment | `--specaug true --specaug_freq 0,8 --specaug_time 0,10` |
 | Tối ưu | `--max_epoch 80 --lr 0.001 --lr_decay 0.97 --lr_step` (0 = theo `test_step`, như gốc) `--weight_decay 2e-5 --grad_clip 0` |
+| Nhiều GPU | `--data_parallel false` (true = chia batch train cho mọi GPU qua `DataParallel`) |
 | Mô hình / loss | `--C 1024 --m 0.2 --s 30 --n_class` (0 = tự đếm từ train list) |
 | Đánh giá | `--eval_list --eval_path --eval_meta --test_step 1 --eval_frames 300 --num_eval 5 --eval_mode both --dcf_ptarget 0.05` |
-| Checkpoint | `--save_path --initial_model --resume auto --keep_last 0 --save_best true --log_interval 1 --device cuda` |
+| Checkpoint | `--save_path --initial_model --resume auto --keep_last 0 --save_best true --log_interval 1 --device cuda --max_hours 0` |
 
 Config `configs/vi_sred26_baseline.yaml` giữ nguyên các hyperparameter huấn luyện của bản gốc. File này chỉ đổi những thứ không ảnh hưởng tới việc học: đường dẫn, `test_step: 2` (đánh giá mỗi 2 epoch để tiết kiệm thời gian, còn LR vẫn giảm mỗi epoch nhờ `lr_step: 1`), `keep_last: 3`, `log_interval: 20`, `seed: 42`.
 

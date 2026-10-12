@@ -20,7 +20,7 @@ from inference import parse_trials, extract_embeddings, score_trials, compute_me
 class ECAPAModel(nn.Module):
 	def __init__(self, lr, lr_decay, C , n_class, m, s, test_step, lr_step=None, weight_decay=2e-5,
 				 device=None, specaug=True, specaug_freq=(0, 8), specaug_time=(0, 10), grad_clip=0.0,
-				 log_interval=1, **kwargs):
+				 log_interval=1, data_parallel=False, **kwargs):
 		super(ECAPAModel, self).__init__()
 		self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
 		## ECAPA-TDNN
@@ -29,6 +29,12 @@ class ECAPAModel(nn.Module):
 		self.speaker_encoder.specaug.freq_mask_width = tuple(specaug_freq)
 		self.speaker_encoder.specaug.time_mask_width = tuple(specaug_time)
 		self.use_specaug = specaug
+		# Multi-GPU training: the DataParallel wrapper is kept OUTSIDE the registered sub-modules,
+		# so state_dict keys (and saved checkpoints) are identical to single-GPU training.
+		self._train_encoder = [self.speaker_encoder]
+		if data_parallel and self.device.type == 'cuda' and torch.cuda.device_count() > 1:
+			self._train_encoder = [nn.DataParallel(self.speaker_encoder)]
+			print('DataParallel on %d GPUs' % torch.cuda.device_count())
 		## Classifier
 		self.speaker_loss    = AAMsoftmax(n_class = n_class, m = m, s = s).to(self.device)
 
@@ -53,7 +59,7 @@ class ECAPAModel(nn.Module):
 		for num, (data, labels) in enumerate(loader, start = 1):
 			self.zero_grad()
 			labels            = torch.LongTensor(labels).to(self.device)
-			speaker_embedding = self.speaker_encoder.forward(data.to(self.device), aug = self.use_specaug)
+			speaker_embedding = self._train_encoder[0](data.to(self.device), aug = self.use_specaug)
 			nloss, prec       = self.speaker_loss.forward(speaker_embedding, labels)
 			nloss.backward()
 			if self.grad_clip > 0:
