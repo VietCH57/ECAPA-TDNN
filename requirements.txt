@@ -1,7 +1,11 @@
-torch==1.7.1+cu110 torchvision==0.8.2+cu110 torchaudio==0.7.2 -f https://download.pytorch.org/whl/torch_stable.html
+# Kaggle / Colab already ship torch + torchaudio: do NOT reinstall them there.
+# Locally: install torch/torchaudio for your CUDA version from https://pytorch.org first.
+torch
+torchaudio
 numpy
 scipy
 scikit-learn
 tqdm
-torchvision
 soundfile
+pyyaml
+pandas   # only for --eval_meta subset metrics

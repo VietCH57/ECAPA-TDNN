@@ -1,0 +1,31 @@
+# Baseline ECAPA-TDNN for Vi-SRED26 on Kaggle.
+# Every value not listed here keeps the original default of the repo (see `python train.py -h`).
+# Any key can be overridden on the command line, e.g.  python train.py --config this.yaml --batch_size 200
+
+# ---- data
+train_list: /kaggle/input/datasets/hongvitchugo/vi-sred26-train/train_split.txt
+train_path: /kaggle/input/datasets/hongvitchugo/vi-sred26-train/Vi-SRED26-Train/data
+eval_list:  /kaggle/input/datasets/hongvitchugo/vi-sred26-train/val_trials.txt
+eval_path:  /kaggle/input/datasets/hongvitchugo/vi-sred26-train/Vi-SRED26-Train/data
+musan_path: /kaggle/input/datasets/nhattruongdev/musan-noise      # music/ noise/ speech/ found automatically
+rir_path:   /kaggle/input/datasets/nhattruongdev/rirs-noises      # simulated_rirs/ found automatically
+save_path:  /kaggle/working/exps/baseline
+
+# ---- original hyper-parameters (unchanged)
+num_frames: 200
+batch_size: 400        # lower it (e.g. 200) if the GPU runs out of memory
+max_epoch: 80
+lr: 0.001
+lr_decay: 0.97
+lr_step: 1             # decay every epoch, as in the original (independent of test_step)
+weight_decay: 0.00002
+C: 1024
+m: 0.2
+s: 30
+
+# ---- Kaggle practicalities (do not change the training itself)
+n_cpu: 4
+test_step: 2           # evaluate on val every 2 epochs (validation takes a few minutes)
+keep_last: 3           # keep only the 3 newest model_XXXX.model (+ best.model, last.ckpt)
+log_interval: 20
+seed: 42

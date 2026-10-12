@@ -1,108 +1,115 @@
 '''
 This part is used to train the speaker model and evaluate the performances
+
+Changes w.r.t. the original (defaults reproduce the original behaviour):
+  * device, weight decay, LR step, grad clipping and SpecAugment ranges are arguments
+  * LR schedule: lr = lr0 * lr_decay ** ((epoch - 1) // lr_step)  (what StepLR.step(epoch - 1) did)
+  * evaluation shares the vectorised code in inference.py; crop length / number / mode are arguments
+  * full checkpoints (model + optimizer) for exact resuming
+  * numpy.float (removed in NumPy >= 1.24) no longer used
+The network (model.py) and the loss (loss.py) are untouched.
 '''
 
-import torch, sys, os, tqdm, numpy, soundfile, time, pickle
+import torch, sys, os, time
 import torch.nn as nn
 from tools import *
 from loss import AAMsoftmax
 from model import ECAPA_TDNN
+from inference import parse_trials, extract_embeddings, score_trials, compute_metrics, subset_metrics
 
 class ECAPAModel(nn.Module):
-	def __init__(self, lr, lr_decay, C , n_class, m, s, test_step, **kwargs):
+	def __init__(self, lr, lr_decay, C , n_class, m, s, test_step, lr_step=None, weight_decay=2e-5,
+				 device=None, specaug=True, specaug_freq=(0, 8), specaug_time=(0, 10), grad_clip=0.0,
+				 log_interval=1, **kwargs):
 		super(ECAPAModel, self).__init__()
+		self.device = torch.device(device or ('cuda' if torch.cuda.is_available() else 'cpu'))
 		## ECAPA-TDNN
-		self.speaker_encoder = ECAPA_TDNN(C = C).cuda()
+		self.speaker_encoder = ECAPA_TDNN(C = C).to(self.device)
+		# SpecAugment settings are plain attributes of FbankAug -> set them without touching model.py
+		self.speaker_encoder.specaug.freq_mask_width = tuple(specaug_freq)
+		self.speaker_encoder.specaug.time_mask_width = tuple(specaug_time)
+		self.use_specaug = specaug
 		## Classifier
-		self.speaker_loss    = AAMsoftmax(n_class = n_class, m = m, s = s).cuda()
+		self.speaker_loss    = AAMsoftmax(n_class = n_class, m = m, s = s).to(self.device)
 
-		self.optim           = torch.optim.Adam(self.parameters(), lr = lr, weight_decay = 2e-5)
-		self.scheduler       = torch.optim.lr_scheduler.StepLR(self.optim, step_size = test_step, gamma=lr_decay)
+		self.lr0, self.lr_decay = lr, lr_decay
+		self.lr_step   = lr_step if lr_step else test_step
+		self.grad_clip = grad_clip
+		self.log_interval = max(1, log_interval)
+		self.optim     = torch.optim.Adam(self.parameters(), lr = lr, weight_decay = weight_decay)
 		print(time.strftime("%m-%d %H:%M:%S") + " Model para number = %.2f"%(sum(param.numel() for param in self.speaker_encoder.parameters()) / 1024 / 1024))
+
+	def lr_at(self, epoch):
+		return self.lr0 * self.lr_decay ** ((epoch - 1) // self.lr_step)
 
 	def train_network(self, epoch, loader):
 		self.train()
-		## Update the learning rate based on the current epcoh
-		self.scheduler.step(epoch - 1)
+		## Update the learning rate based on the current epoch
+		lr = self.lr_at(epoch)
+		for g in self.optim.param_groups:
+			g['lr'] = lr
 		index, top1, loss = 0, 0, 0
-		lr = self.optim.param_groups[0]['lr']
+		n_batches = len(loader)
 		for num, (data, labels) in enumerate(loader, start = 1):
 			self.zero_grad()
-			labels            = torch.LongTensor(labels).cuda()
-			speaker_embedding = self.speaker_encoder.forward(data.cuda(), aug = True)
-			nloss, prec       = self.speaker_loss.forward(speaker_embedding, labels)			
+			labels            = torch.LongTensor(labels).to(self.device)
+			speaker_embedding = self.speaker_encoder.forward(data.to(self.device), aug = self.use_specaug)
+			nloss, prec       = self.speaker_loss.forward(speaker_embedding, labels)
 			nloss.backward()
+			if self.grad_clip > 0:
+				torch.nn.utils.clip_grad_norm_(self.parameters(), self.grad_clip)
 			self.optim.step()
 			index += len(labels)
 			top1 += prec
 			loss += nloss.detach().cpu().numpy()
-			sys.stderr.write(time.strftime("%m-%d %H:%M:%S") + \
-			" [%2d] Lr: %5f, Training: %.2f%%, "    %(epoch, lr, 100 * (num / loader.__len__())) + \
-			" Loss: %.5f, ACC: %2.2f%% \r"        %(loss/(num), top1/index*len(labels)))
-			sys.stderr.flush()
+			if num % self.log_interval == 0 or num == n_batches:
+				sys.stderr.write(time.strftime("%m-%d %H:%M:%S") + \
+				" [%2d] Lr: %5f, Training: %.2f%%, "    %(epoch, lr, 100 * (num / n_batches)) + \
+				" Loss: %.5f, ACC: %2.2f%% \r"        %(loss/(num), top1/index*len(labels)))
+				sys.stderr.flush()
 		sys.stdout.write("\n")
-		return loss/num, lr, top1/index*len(labels)
+		return loss/num, lr, (top1/index*len(labels)).item() if torch.is_tensor(top1) else top1/index*len(labels)
 
-	def eval_network(self, eval_list, eval_path):
+	def eval_network(self, eval_list, eval_path, eval_frames=300, num_eval=5, eval_mode='both',
+					 p_targets=(0.05,), eval_meta='', return_all=False):
+		'''Original signature/return value kept: returns (EER, minDCF@p_targets[0]).
+		With return_all=True returns a dict with all metrics (and subset metrics if eval_meta is given).'''
 		self.eval()
-		files = []
-		embeddings = {}
-		lines = open(eval_list).read().splitlines()
-		for line in lines:
-			files.append(line.split()[1])
-			files.append(line.split()[2])
-		setfiles = list(set(files))
-		setfiles.sort()
-
-		for idx, file in tqdm.tqdm(enumerate(setfiles), total = len(setfiles)):
-			audio, _  = soundfile.read(os.path.join(eval_path, file))
-			# Full utterance
-			data_1 = torch.FloatTensor(numpy.stack([audio],axis=0)).cuda()
-
-			# Spliited utterance matrix
-			max_audio = 300 * 160 + 240
-			if audio.shape[0] <= max_audio:
-				shortage = max_audio - audio.shape[0]
-				audio = numpy.pad(audio, (0, shortage), 'wrap')
-			feats = []
-			startframe = numpy.linspace(0, audio.shape[0]-max_audio, num=5)
-			for asf in startframe:
-				feats.append(audio[int(asf):int(asf)+max_audio])
-			feats = numpy.stack(feats, axis = 0).astype(numpy.float)
-			data_2 = torch.FloatTensor(feats).cuda()
-			# Speaker embeddings
-			with torch.no_grad():
-				embedding_1 = self.speaker_encoder.forward(data_1, aug = False)
-				embedding_1 = F.normalize(embedding_1, p=2, dim=1)
-				embedding_2 = self.speaker_encoder.forward(data_2, aug = False)
-				embedding_2 = F.normalize(embedding_2, p=2, dim=1)
-			embeddings[file] = [embedding_1, embedding_2]
-		scores, labels  = [], []
-
-		for line in lines:			
-			embedding_11, embedding_12 = embeddings[line.split()[1]]
-			embedding_21, embedding_22 = embeddings[line.split()[2]]
-			# Compute the scores
-			score_1 = torch.mean(torch.matmul(embedding_11, embedding_21.T)) # higher is positive
-			score_2 = torch.mean(torch.matmul(embedding_12, embedding_22.T))
-			score = (score_1 + score_2) / 2
-			score = score.detach().cpu().numpy()
-			scores.append(score)
-			labels.append(int(line.split()[0]))
-			
-		# Coumpute EER and minDCF
-		EER = tuneThresholdfromScore(scores, labels, [1, 0.1])[1]
-		fnrs, fprs, thresholds = ComputeErrorRates(scores, labels)
-		minDCF, _ = ComputeMinDcf(fnrs, fprs, thresholds, 0.05, 1, 1)
-
-		return EER, minDCF
+		enroll, test, labels = parse_trials(eval_list)
+		if labels[0] is None:
+			raise ValueError('%s has no labels; use infer.py --mode score for unlabelled trials' % eval_list)
+		files = sorted(set(enroll) | set(test))
+		emb = extract_embeddings(self.speaker_encoder, files, eval_path, self.device, eval_frames, num_eval, eval_mode)
+		scores = score_trials(emb, enroll, test, eval_mode)
+		res = compute_metrics(scores, labels, p_targets)
+		if eval_meta:
+			res.update(subset_metrics(scores, labels, enroll, test, eval_meta, p_targets[0]))
+		if return_all:
+			return res
+		return res['EER'], res['minDCF%g' % p_targets[0]]
 
 	def save_parameters(self, path):
 		torch.save(self.state_dict(), path)
 
+	def save_checkpoint(self, path, epoch, extra=None):
+		ckpt = {'model': self.state_dict(), 'optim': self.optim.state_dict(), 'epoch': epoch}
+		if extra:
+			ckpt.update(extra)
+		tmp = path + '.tmp'
+		torch.save(ckpt, tmp)
+		os.replace(tmp, path)
+
+	def load_checkpoint(self, path):
+		ckpt = torch.load(path, map_location=self.device)
+		self.load_state_dict(ckpt['model'])
+		self.optim.load_state_dict(ckpt['optim'])
+		return ckpt
+
 	def load_parameters(self, path):
 		self_state = self.state_dict()
-		loaded_state = torch.load(path)
+		loaded_state = torch.load(path, map_location=self.device)
+		if isinstance(loaded_state, dict) and 'model' in loaded_state and isinstance(loaded_state['model'], dict):
+			loaded_state = loaded_state['model']
 		for name, param in loaded_state.items():
 			origname = name
 			if name not in self_state:

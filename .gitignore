@@ -1,0 +1,4 @@
+__pycache__/
+*.pyc
+exps/*
+!exps/pretrain_score.txt
